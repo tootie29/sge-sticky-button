@@ -769,10 +769,10 @@ function sge_sb_render_button() {
 		return;
 	}
 
-	$position      = $s['position'];
-	$position_css  = sge_sb_get_position_css( $s );
-	$border_radius = sge_sb_get_border_radius( $position );
-	$hover_transform = sge_sb_get_hover_transform( $position );
+	$position        = $s['position'];
+	$position_css    = sge_sb_get_position_css( $s );
+	$border_radius   = sge_sb_get_border_radius( $position, $s );
+	$hover_transform = sge_sb_get_hover_transform( $position, $s );
 
 	$bg_color    = esc_attr( $s['bg_color'] );
 	$text_color  = esc_attr( $s['text_color'] );
@@ -796,7 +796,7 @@ function sge_sb_render_button() {
 		line-height: <?php echo $line_height; ?>;
 		text-decoration: none;
 		white-space: nowrap;
-		border-radius: <?php echo $border_radius; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>;
+		border-radius: <?php echo $border_radius; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?> !important;
 		transition: filter .2s ease, transform .2s ease;
 	}
 	#sge-sticky-btn:hover {
@@ -879,34 +879,74 @@ function sge_sb_get_position_css( $s ) {
  * Returns the border-radius value based on button position.
  *
  * Preset positions produce an edge-anchored tab — pill-shaped on the inner
- * side and flat against the viewport edge.
+ * side and flat against the viewport edge. For custom positions, the edge
+ * is inferred from the right/left values: if right is 0 the button is
+ * anchored to the right edge; if left is 0 it is anchored to the left edge.
  *
  * @param  string $position One of 'bottom-right', 'bottom-left', or 'custom'.
+ * @param  array  $s        Plugin settings (used to read custom_right / custom_left).
  * @return string           A CSS border-radius value.
  */
-function sge_sb_get_border_radius( $position ) {
+function sge_sb_get_border_radius( $position, $s = array() ) {
 	switch ( $position ) {
 		case 'bottom-right':
 			return '50px 0 0 50px'; // Rounded inner (left), flat edge (right).
+
 		case 'bottom-left':
 			return '0 50px 50px 0'; // Flat edge (left), rounded inner (right).
+
+		case 'custom':
+			$right = sge_sb_sanitize_css_value( $s['custom_right'] ?? '', '' );
+			$left  = sge_sb_sanitize_css_value( $s['custom_left']  ?? '', '' );
+
+			// Anchored to the right edge (right is 0, left is unset).
+			if ( '' === $left && in_array( $right, array( '0', '0px' ), true ) ) {
+				return '50px 0 0 50px';
+			}
+
+			// Anchored to the left edge (left is 0, right is unset).
+			if ( '' === $right && in_array( $left, array( '0', '0px' ), true ) ) {
+				return '0 50px 50px 0';
+			}
+
+			return '50px'; // Floating — full pill.
+
 		default:
-			return '50px';          // Full pill for custom position.
+			return '50px';
 	}
 }
 
 /**
  * Returns the hover transform that pulls the button away from its anchored edge.
  *
+ * For custom positions the edge is inferred the same way as border-radius.
+ *
  * @param  string $position One of 'bottom-right', 'bottom-left', or 'custom'.
+ * @param  array  $s        Plugin settings (used to read custom_right / custom_left).
  * @return string           A CSS transform value.
  */
-function sge_sb_get_hover_transform( $position ) {
+function sge_sb_get_hover_transform( $position, $s = array() ) {
 	switch ( $position ) {
 		case 'bottom-right':
 			return 'translateX(-4px)';
+
 		case 'bottom-left':
 			return 'translateX(4px)';
+
+		case 'custom':
+			$right = sge_sb_sanitize_css_value( $s['custom_right'] ?? '', '' );
+			$left  = sge_sb_sanitize_css_value( $s['custom_left']  ?? '', '' );
+
+			if ( '' === $left && in_array( $right, array( '0', '0px' ), true ) ) {
+				return 'translateX(-4px)'; // Anchored right — slide left on hover.
+			}
+
+			if ( '' === $right && in_array( $left, array( '0', '0px' ), true ) ) {
+				return 'translateX(4px)'; // Anchored left — slide right on hover.
+			}
+
+			return 'translateY(-3px)'; // Floating — lift on hover.
+
 		default:
 			return 'translateY(-3px)';
 	}
