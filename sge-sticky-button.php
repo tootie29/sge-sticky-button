@@ -2,7 +2,7 @@
 /**
  * Plugin Name: SGE Sticky Button
  * Description: Adds a customizable sticky button to selected pages/posts with configurable text, URL, position, and style.
- * Version:     1.3.0
+ * Version:     1.4.0
  * Author:      SGE
  * License:     GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -13,18 +13,75 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SGE_SB_VERSION', '1.3.0' );
+define( 'SGE_SB_VERSION', '1.4.0' );
 define( 'SGE_SB_OPTION',  'sge_sticky_button_settings' );
 
 // =============================================================================
 // Hook registrations
 // =============================================================================
 
+add_action( 'init',           'sge_sb_register_meta' );
 add_action( 'admin_menu',    'sge_sb_register_menu' );
 add_action( 'admin_init',    'sge_sb_register_settings' );
 add_action( 'add_meta_boxes', 'sge_sb_add_meta_box' );
 add_action( 'save_post',     'sge_sb_save_meta_box' );
 add_action( 'wp_footer',     'sge_sb_render_button' );
+
+// =============================================================================
+// 0. Meta field registration
+// =============================================================================
+
+/**
+ * Registers the per-post meta fields for all public post types.
+ *
+ * Registering meta ensures:
+ * - Consistent type coercion when reading/writing values.
+ * - Correct behaviour in both the classic editor and the block editor (Gutenberg),
+ *   where the primary save uses the REST API and $_POST is not available.
+ */
+function sge_sb_register_meta() {
+	$post_types = get_post_types( array( 'public' => true ), 'names' );
+
+	$meta_fields = array(
+		'_sge_sb_enabled'     => array(
+			'type'        => 'string',
+			'description' => 'SGE Sticky Button enabled state for this post (1 = on, 0 = off, empty = follow global rules).',
+			'default'     => '',
+		),
+		'_sge_sb_button_text' => array(
+			'type'        => 'string',
+			'description' => 'SGE Sticky Button text override for this post.',
+			'default'     => '',
+		),
+		'_sge_sb_button_url'  => array(
+			'type'        => 'string',
+			'description' => 'SGE Sticky Button URL override for this post.',
+			'default'     => '',
+		),
+	);
+
+	$auth_callback = static function () {
+		return current_user_can( 'edit_posts' );
+	};
+
+	foreach ( $post_types as $post_type ) {
+		foreach ( $meta_fields as $meta_key => $args ) {
+			register_post_meta(
+				$post_type,
+				$meta_key,
+				array(
+					'type'              => $args['type'],
+					'description'       => $args['description'],
+					'single'            => true,
+					'default'           => $args['default'],
+					'show_in_rest'      => false,
+					'sanitize_callback' => 'sanitize_text_field',
+					'auth_callback'     => $auth_callback,
+				)
+			);
+		}
+	}
+}
 
 // =============================================================================
 // 1. Settings — defaults, retrieval, sanitization
@@ -544,7 +601,8 @@ function sge_sb_add_meta_box() {
 		'sge_sb_render_meta_box',
 		$post_types,
 		'side',
-		'default'
+		'default',
+		array( '__block_editor_compatible_meta_box' => true )
 	);
 }
 
@@ -563,7 +621,7 @@ function sge_sb_render_meta_box( $post ) {
 	$is_enabled = ( '1' === $enabled );
 	$s          = sge_sb_get_settings();
 	?>
-	<p style="margin: 0 0 10px;">
+	<p style="margin: 0 0 6px;">
 		<label style="font-weight: 600; font-size: 13px;">
 			<input type="checkbox"
 				id="sge_sb_enabled"
@@ -572,6 +630,10 @@ function sge_sb_render_meta_box( $post ) {
 				<?php checked( $is_enabled ); ?>>
 			<?php esc_html_e( 'Enable Sticky Button', 'sge-sticky-button' ); ?>
 		</label>
+	</p>
+
+	<p style="margin: 0 0 10px; color: #646970; font-size: 12px;">
+		<?php esc_html_e( 'Checked: always show on this page, ignoring global display rules. Unchecked: always hide, ignoring global display rules. Remember to Update/Publish to save.', 'sge-sticky-button' ); ?>
 	</p>
 
 	<div id="sge_sb_override_fields"<?php echo ! $is_enabled ? ' style="display:none;"' : ''; ?>>
@@ -669,12 +731,24 @@ function sge_sb_render_button() {
 	$post_enabled = get_post_meta( $post_id, '_sge_sb_enabled', true );
 
 	/*
-	 * Display logic:
-	 * - '1'  → post-level enable; bypass global display rules.
-	 * - '0'  → explicitly disabled via meta box; obey global rules.
-	 * - ''   → never saved; obey global rules.
+	 * Display logic — three states:
+	 *
+	 * '1'  → Post-level force-ON.  Always render; bypass global display rules entirely.
+	 * '0'  → Post-level force-OFF. Never render; overrides global display rules entirely.
+	 * ''   → Not set (post never saved with meta box). Obey global display rules.
+	 *
+	 * This means the meta box checkbox is a true three-way override:
+	 *   checked   → show regardless of admin settings
+	 *   unchecked → hide regardless of admin settings (once the post is saved)
+	 *   never saved → follow admin settings
 	 */
-	if ( '1' !== $post_enabled ) {
+	if ( '1' === $post_enabled ) {
+		// Force-ON: bypass all global display rules — fall through to render.
+	} elseif ( '0' === $post_enabled ) {
+		// Force-OFF: explicitly disabled for this post — never render.
+		return;
+	} else {
+		// Not set: apply global display rules.
 		if ( 'specific' === $s['display_on'] ) {
 			$allowed_ids = array_filter( array_map( 'absint', explode( ',', $s['specific_ids'] ) ) );
 			if ( empty( $allowed_ids ) || ! in_array( $post_id, $allowed_ids, true ) ) {
